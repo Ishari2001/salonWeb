@@ -18,19 +18,23 @@ const serviceSeatLimits = {
   "Hair Spa": 2,
 };
 
-const SALON_OPEN = 9;  // 9 AM
-const SALON_CLOSE = 17; // 5 PM
-const DAILY_LIMIT_MINUTES = 480; // 8 hours
+const SALON_OPEN = 9;
+const SALON_CLOSE = 17;
+const DAILY_LIMIT_MINUTES = 480;
 
 function timeToMinutes(timeStr) {
   const [h, m] = timeStr.split(":").map(Number);
   return h * 60 + m;
 }
 
+function formatDate(date) {
+  return date.toISOString().split("T")[0];
+}
+
 export async function POST(req) {
   try {
     const data = await req.json();
-    let { full_name, email, service, appointment_date, appointment_time } = data;
+    let { full_name, email, service, appointment_date, appointment_time, confirmNextDay } = data;
 
     full_name = full_name?.trim();
     email = email?.trim();
@@ -45,7 +49,6 @@ export async function POST(req) {
     const duration = serviceDurations[service];
     if (!duration) return new Response(JSON.stringify({ error: "Invalid service" }), { status: 400 });
 
-    // Check salon hours
     const [h, m] = appointment_time.split(":").map(Number);
     const startMinutes = h * 60 + m;
     const endMinutes = startMinutes + duration;
@@ -59,17 +62,18 @@ export async function POST(req) {
 
     const pool = getDBPool();
     const seatLimit = serviceSeatLimits[service] ?? 1;
+    let currentDate = new Date(appointment_date);
 
-    // Fetch existing bookings for the day
+    // Check availability
     const [existingRows] = await pool.execute(
       `SELECT appointment_time, service FROM bookings WHERE appointment_date=?`,
-      [appointment_date]
+      [formatDate(currentDate)]
     );
 
-    // 1️⃣ Check overlapping bookings per service
+    // Overlap check
     let overlapCount = 0;
     for (const row of existingRows) {
-      if (row.service !== service) continue; // only check same service
+      if (row.service !== service) continue;
       const existingStart = timeToMinutes(row.appointment_time);
       const existingEnd = existingStart + serviceDurations[row.service];
       if (Math.max(existingStart, startMinutes) < Math.min(existingEnd, endMinutes)) {
@@ -84,31 +88,46 @@ export async function POST(req) {
       );
     }
 
-    // 2️⃣ Check total daily limit
-    let totalBookedMinutes = 0;
-    existingRows.forEach(row => {
-      const rowDuration = serviceDurations[row.service];
-      totalBookedMinutes += rowDuration;
-    });
+    // Daily limit
+    let totalBookedMinutes = existingRows.reduce(
+      (sum, row) => sum + serviceDurations[row.service],
+      0
+    );
 
     if (totalBookedMinutes + duration > DAILY_LIMIT_MINUTES) {
-      return new Response(
-        JSON.stringify({
-          error: "Appointments for today are full.",
-          message: "Would you like to make a booking for tomorrow?"
-        }),
-        { status: 409 }
-      );
+      if (!confirmNextDay) {
+        // Suggest next day
+        const nextDay = new Date(currentDate);
+        nextDay.setDate(currentDate.getDate() + 1);
+        return new Response(
+          JSON.stringify({
+            error: "Appointments for today are full. Would you like to book for tomorrow?",
+            message: "Would you like to book for tomorrow?",
+            suggestedDate: formatDate(nextDay)
+          }),
+          { status: 409 }
+        );
+      } else {
+        // User confirmed → book next available day
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
     }
 
-    // Insert booking
+    // Save booking
     await pool.execute(
       `INSERT INTO bookings (full_name, email, service, appointment_date, appointment_time)
        VALUES (?, ?, ?, ?, ?)`,
-      [full_name, email, service, appointment_date, appointment_time]
+      [full_name, email, service, formatDate(currentDate), appointment_time]
     );
 
-    return new Response(JSON.stringify({ success: true, message: "Booking saved" }), { status: 201 });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: `Booking saved on ${formatDate(currentDate)}`,
+        appointment_date: formatDate(currentDate)
+      }),
+      { status: 201 }
+    );
 
   } catch (err) {
     console.error("Booking API Error:", err);

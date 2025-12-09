@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@headlessui/react": "^2.2.9",
     "@prisma/client": "^7.1.0",
     "mysql2": "^3.15.3",
     "next": "16.0.7",

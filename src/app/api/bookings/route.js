@@ -60,16 +60,16 @@ export async function POST(req) {
     const pool = getDBPool();
     const seatLimit = serviceSeatLimits[service] ?? 1;
 
-    // Fetch existing bookings for the service and date
+    // Fetch existing bookings for the day
     const [existingRows] = await pool.execute(
       `SELECT appointment_time, service FROM bookings WHERE appointment_date=?`,
       [appointment_date]
     );
 
-    // 1️⃣ Check overlapping bookings per time slot
+    // 1️⃣ Check overlapping bookings per service
     let overlapCount = 0;
     for (const row of existingRows) {
-      if (row.service !== service) continue; // Only check same service for seat limit
+      if (row.service !== service) continue; // only check same service
       const existingStart = timeToMinutes(row.appointment_time);
       const existingEnd = existingStart + serviceDurations[row.service];
       if (Math.max(existingStart, startMinutes) < Math.min(existingEnd, endMinutes)) {
@@ -84,7 +84,7 @@ export async function POST(req) {
       );
     }
 
-    // 2️⃣ Check total daily limit (sum all booked durations)
+    // 2️⃣ Check total daily limit
     let totalBookedMinutes = 0;
     existingRows.forEach(row => {
       const rowDuration = serviceDurations[row.service];
@@ -93,7 +93,10 @@ export async function POST(req) {
 
     if (totalBookedMinutes + duration > DAILY_LIMIT_MINUTES) {
       return new Response(
-        JSON.stringify({ error: `Cannot book ${service}. Salon daily limit of 8 hours reached.` }),
+        JSON.stringify({
+          error: "Appointments for today are full.",
+          message: "Would you like to make a booking for tomorrow?"
+        }),
         { status: 409 }
       );
     }

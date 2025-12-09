@@ -9,48 +9,41 @@ const serviceSeatLimits = {
   "Hair Spa": 2,
 };
 
-const maxDailyAppointments = 5;
-
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
-    const date = searchParams.get("date");
-    const service = searchParams.get("service");
+
+    let date = searchParams.get("date")?.trim();
+    let service = searchParams.get("service")?.trim();
 
     if (!date || !service) {
       return new Response(JSON.stringify({ error: "Date and service required" }), { status: 400 });
     }
 
+    if (!serviceSeatLimits[service]) {
+      return new Response(JSON.stringify({ error: "Invalid service" }), { status: 400 });
+    }
+
+    const seatLimit = serviceSeatLimits[service];
     const pool = getDBPool();
 
-    // 1. All booked times for the service
+    // Fetch bookings for the given date & service
     const [rows] = await pool.execute(
       `SELECT appointment_time FROM bookings WHERE appointment_date=? AND service=?`,
       [date, service]
     );
 
+    // Count bookings per time slot
     const bookedCounts = {};
-    rows.forEach(r => {
-      bookedCounts[r.appointment_time] = (bookedCounts[r.appointment_time] || 0) + 1;
+    rows.forEach((r) => {
+      const time = r.appointment_time;
+      bookedCounts[time] = (bookedCounts[time] || 0) + 1;
     });
 
-    // 2. Compute fully booked slots for this service
-    const fullyBookedSlots = Object.keys(bookedCounts).filter(
-      time => bookedCounts[time] >= serviceSeatLimits[service]
-    );
+    // Find slots where all seats are full
+    const fullSlots = Object.keys(bookedCounts).filter((time) => bookedCounts[time] >= seatLimit);
 
-    // 3. Check daily total
-    const [dailyRows] = await pool.execute(
-      `SELECT COUNT(*) AS count FROM bookings WHERE appointment_date=?`,
-      [date]
-    );
-    const dailyCount = dailyRows[0]?.count ?? 0;
-    const fullyBookedDay = dailyCount >= maxDailyAppointments;
-
-    return new Response(
-      JSON.stringify({ bookedCounts, fullyBookedSlots, fullyBookedDay }),
-      { status: 200 }
-    );
+    return new Response(JSON.stringify({ bookedCounts, fullSlots, seatLimit }), { status: 200 });
   } catch (err) {
     console.error("Booked API Error:", err);
     return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500 });

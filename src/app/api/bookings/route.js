@@ -1,6 +1,14 @@
 import { getDBPool } from "../../../../lib/db";
 
-// Seat limits per service
+const serviceDurations = {
+  "Hair Cut": 60,
+  "Pedicure": 90,
+  "Hair Coloring": 120,
+  "Facial": 60,
+  "Manicure": 60,
+  "Hair Spa": 90,
+};
+
 const serviceSeatLimits = {
   "Hair Cut": 2,
   "Pedicure": 2,
@@ -10,62 +18,95 @@ const serviceSeatLimits = {
   "Hair Spa": 2,
 };
 
-const maxDailyAppointments = 5;
+const SALON_OPEN = 9;  // 9 AM
+const SALON_CLOSE = 17; // 5 PM
+const DAILY_LIMIT_MINUTES = 480; // 8 hours
+
+function timeToMinutes(timeStr) {
+  const [h, m] = timeStr.split(":").map(Number);
+  return h * 60 + m;
+}
 
 export async function POST(req) {
   try {
     const data = await req.json();
-    const { full_name, email, service, appointment_date, appointment_time } = data;
+    let { full_name, email, service, appointment_date, appointment_time } = data;
 
-    // 1. Validation
+    full_name = full_name?.trim();
+    email = email?.trim();
+    service = service?.trim();
+    appointment_date = appointment_date?.trim();
+    appointment_time = appointment_time?.trim();
+
     if (!full_name || !email || !service || !appointment_date || !appointment_time) {
       return new Response(JSON.stringify({ error: "All fields are required" }), { status: 400 });
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return new Response(JSON.stringify({ error: "Invalid email" }), { status: 400 });
+    const duration = serviceDurations[service];
+    if (!duration) return new Response(JSON.stringify({ error: "Invalid service" }), { status: 400 });
+
+    // Check salon hours
+    const [h, m] = appointment_time.split(":").map(Number);
+    const startMinutes = h * 60 + m;
+    const endMinutes = startMinutes + duration;
+
+    if (h < SALON_OPEN || endMinutes > SALON_CLOSE * 60) {
+      return new Response(
+        JSON.stringify({ error: "Service must be within salon hours (9 AM - 5 PM)" }),
+        { status: 400 }
+      );
     }
 
     const pool = getDBPool();
-
-    // 2. Check total daily appointments (all services)
-    const [dailyRows] = await pool.execute(
-      `SELECT COUNT(*) AS count FROM bookings WHERE appointment_date=?`,
-      [appointment_date]
-    );
-    const dailyCount = dailyRows[0]?.count ?? 0;
-
-    if (dailyCount >= maxDailyAppointments) {
-      return new Response(
-        JSON.stringify({ error: "Maximum 5 appointments reached for this date" }),
-        { status: 409 }
-      );
-    }
-
-    // 3. Check service seat limit per time slot
     const seatLimit = serviceSeatLimits[service] ?? 1;
 
-    const [serviceRows] = await pool.execute(
-      `SELECT COUNT(*) AS count FROM bookings WHERE appointment_date=? AND service=? AND appointment_time=?`,
-      [appointment_date, service, appointment_time]
+    // Fetch existing bookings for the service and date
+    const [existingRows] = await pool.execute(
+      `SELECT appointment_time, service FROM bookings WHERE appointment_date=?`,
+      [appointment_date]
     );
-    const serviceCount = serviceRows[0]?.count ?? 0;
 
-    if (serviceCount >= seatLimit) {
+    // 1️⃣ Check overlapping bookings per time slot
+    let overlapCount = 0;
+    for (const row of existingRows) {
+      if (row.service !== service) continue; // Only check same service for seat limit
+      const existingStart = timeToMinutes(row.appointment_time);
+      const existingEnd = existingStart + serviceDurations[row.service];
+      if (Math.max(existingStart, startMinutes) < Math.min(existingEnd, endMinutes)) {
+        overlapCount++;
+      }
+    }
+
+    if (overlapCount >= seatLimit) {
       return new Response(
-        JSON.stringify({ error: `Maximum ${seatLimit} appointments reached for ${service} at ${appointment_time} on this date` }),
+        JSON.stringify({ error: `All ${seatLimit} seats are already booked for ${service} at this time` }),
         { status: 409 }
       );
     }
 
-    // 4. Insert booking
+    // 2️⃣ Check total daily limit (sum all booked durations)
+    let totalBookedMinutes = 0;
+    existingRows.forEach(row => {
+      const rowDuration = serviceDurations[row.service];
+      totalBookedMinutes += rowDuration;
+    });
+
+    if (totalBookedMinutes + duration > DAILY_LIMIT_MINUTES) {
+      return new Response(
+        JSON.stringify({ error: `Cannot book ${service}. Salon daily limit of 8 hours reached.` }),
+        { status: 409 }
+      );
+    }
+
+    // Insert booking
     await pool.execute(
-      `INSERT INTO bookings (full_name, email, service, appointment_date, appointment_time) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO bookings (full_name, email, service, appointment_date, appointment_time)
+       VALUES (?, ?, ?, ?, ?)`,
       [full_name, email, service, appointment_date, appointment_time]
     );
 
     return new Response(JSON.stringify({ success: true, message: "Booking saved" }), { status: 201 });
+
   } catch (err) {
     console.error("Booking API Error:", err);
     return new Response(JSON.stringify({ error: "Internal Server Error" }), { status: 500 });

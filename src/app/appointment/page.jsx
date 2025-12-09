@@ -10,8 +10,7 @@ export default function AppointmentPage() {
   const [service, setService] = useState("");
   const [date, setDate] = useState("");
   const [timeSlots, setTimeSlots] = useState([]);
-  const [bookedSlots, setBookedSlots] = useState([]); // will hold slots where seat-limit reached
-  const [fullyBookedDay, setFullyBookedDay] = useState(false);
+  const [bookedSlots, setBookedSlots] = useState([]);
 
   const [formData, setFormData] = useState({
     fullName: "",
@@ -30,100 +29,58 @@ export default function AppointmentPage() {
     "Hair Spa": 90,
   };
 
-  const serviceSeatLimits = {
-    "Hair Cut": 2,
-    "Pedicure": 2,
-    "Hair Coloring": 2,
-    "Facial": 2,
-    "Manicure": 2,
-    "Hair Spa": 2,
-  };
+  const SALON_OPEN = 9;
+  const SALON_CLOSE = 17;
 
-  const startHour = 9;
-  const endHour = 18;
-
-  // Generate time slots dynamically
+  // Generate all time slots for selected service
   const generateTimeSlots = (service) => {
     const duration = serviceDurations[service];
     if (!duration) return [];
 
     let slots = [];
-    const current = new Date();
-    current.setHours(startHour, 0, 0, 0);
-
+    let current = new Date();
+    current.setHours(SALON_OPEN, 0, 0, 0);
     const endTime = new Date();
-    endTime.setHours(endHour, 0, 0, 0);
+    endTime.setHours(SALON_CLOSE, 0, 0, 0);
 
     while (current.getTime() + duration * 60000 <= endTime.getTime()) {
-      const hour = current.getHours().toString().padStart(2, "0");
-      const min = current.getMinutes().toString().padStart(2, "0");
-      slots.push(`${hour}:${min}`);
-      current.setTime(current.getTime() + duration * 60000);
+      const slot = `${String(current.getHours()).padStart(2, "0")}:${String(
+        current.getMinutes()
+      ).padStart(2, "0")}`;
+      slots.push(slot);
+      current = new Date(current.getTime() + duration * 60000);
     }
 
     return slots;
   };
 
-  // UPDATE SLOTS WHEN SERVICE OR DATE CHANGES
+  // Fetch booked slots whenever service or date changes
   useEffect(() => {
     if (service && date) {
       const slots = generateTimeSlots(service);
       setTimeSlots(slots);
 
-      // Fetch service-based slot status
       fetch(`/api/booked?date=${date}&service=${service}`)
         .then((res) => res.json())
         .then((data) => {
-          setFullyBookedDay(data.fullyBookedDay);
-
-          if (data.fullyBookedDay) {
-            alert("Maximum 5 appointments reached for this date");
-
-            // Reset everything
-            setService("");
-            setDate("");
-            setTimeSlots([]);
-            setBookedSlots([]);
-            setFormData({
-              fullName: "",
-              email: "",
-              service: "",
-              date: "",
-              time: "",
-            });
-            return;
-          }
-
-          // These slots have seat-limit reached
           setBookedSlots(data.fullSlots || []);
-
-          // Reset time dropdown
-          setFormData((prev) => ({
-            ...prev,
-            service,
-            date,
-            time: "",
-          }));
-        })
-        .catch((err) => console.error(err));
+          setFormData((prev) => ({ ...prev, service, date, time: "" }));
+        });
     } else {
       setTimeSlots([]);
       setBookedSlots([]);
-      setFormData((prev) => ({ ...prev, time: "" }));
     }
   }, [service, date]);
 
-  // SUBMIT HANDLER
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
 
-    if (fullyBookedDay) {
-      alert("Cannot book. Maximum 5 appointments reached for this date.");
-      setLoading(false);
+    if (!formData.time) {
+      alert("Please select a time slot.");
       return;
     }
 
+    setLoading(true);
     try {
       const res = await fetch("/api/bookings", {
         method: "POST",
@@ -141,91 +98,77 @@ export default function AppointmentPage() {
 
       if (res.ok) {
         alert("Appointment booked successfully!");
-
-        // Reset form
-        setFormData({
-          fullName: "",
-          email: "",
-          service: "",
-          date: "",
-          time: "",
-        });
+        setFormData({ fullName: "", email: "", service: "", date: "", time: "" });
         setService("");
         setDate("");
         setTimeSlots([]);
         setBookedSlots([]);
       } else {
-        alert(result.error || "Failed to save appointment.");
+        alert(result.error);
       }
-    } catch (err) {
-      console.error(err);
-      alert("Error saving appointment!");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="w-full min-h-screen flex bg-white text-gray-900 font-sans">
-
-      {/* LEFT SIDE */}
-      <div className="w-1/2 min-h-screen bg-black flex flex-col items-center justify-center p-12 text-white">
-        <h1 className="text-5xl font-extrabold mb-6 tracking-wide drop-shadow-lg text-white">
+    <div className="w-full h-screen flex overflow-hidden bg-white text-gray-900 font-sans">
+      {/* Left Panel */}
+      <div className="w-1/2 h-full bg-black flex flex-col items-center justify-center p-12 text-white">
+        <h1 className="text-5xl font-extrabold mb-6 tracking-wide drop-shadow-lg">
           GLAMOUR SALOON
         </h1>
-
-        <div className="w-72 h-72 rounded-3xl shadow-2xl mb-6 overflow-hidden transform hover:scale-105 transition-transform duration-500">
-          <img src="/images.png" alt="Salon Logo" className="w-full h-full object-cover" />
+        <div className="w-72 h-72 rounded-3xl shadow-xl mb-6 overflow-hidden transform hover:scale-105 transition-transform duration-500">
+          <img src="/images.png" className="w-full h-full object-cover" />
         </div>
-
         <button
           onClick={() => router.push("/services")}
-          className="bg-white text-black px-8 py-3 rounded-full font-semibold shadow-lg hover:shadow-xl hover:bg-gray-200 transition-all duration-300 text-lg"
+          className="bg-white text-black px-8 py-3 rounded-full font-semibold shadow-lg hover:bg-gray-200 transition-all"
         >
-          Explore Services
+          Explore Services & View Available Seat
         </button>
       </div>
 
-      {/* RIGHT SIDE */}
-      <div className="w-1/2 min-h-screen bg-blue-50 p-12 flex flex-col justify-center">
-        <h2 className="text-2xl font-bold text-center mb-8">Book Your Appointment</h2>
+      {/* Right Panel */}
+      <div className="w-1/2 h-full bg-blue-50 p-12 flex flex-col justify-center">
+        <h2 className="text-3xl font-bold text-center mb-10">Book Your Appointment</h2>
 
-        <form className="space-y-6 bg-white p-10 rounded-3xl shadow-2xl max-w-lg mx-auto" onSubmit={handleSubmit}>
-
+        <form
+          className="space-y-5 backdrop-blur-xl bg-white/60 border border-white/30 p-8 rounded-3xl shadow-2xl max-w-md mx-auto"
+          onSubmit={handleSubmit}
+        >
           {/* Full Name */}
-          <div className="flex flex-col">
-            <label className="text-gray-800 font-semibold mb-2">Full Name</label>
+          <div>
+            <label className="font-semibold">Full Name</label>
             <input
               type="text"
               value={formData.fullName}
-              onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-              placeholder="Enter full name"
-              className="px-5 py-3 border border-gray-300 rounded-xl text-gray-800"
               required
+              onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+              className="px-5 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-black w-full"
             />
           </div>
 
           {/* Email */}
-          <div className="flex flex-col">
-            <label className="text-gray-800 font-semibold mb-2">Email</label>
+          <div>
+            <label className="font-semibold">Email</label>
             <input
               type="email"
               value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              placeholder="Enter email"
-              className="px-5 py-3 border border-gray-300 rounded-xl text-gray-800"
               required
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              className="px-5 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-black w-full"
             />
           </div>
 
           {/* Service */}
-          <div className="flex flex-col">
-            <label className="text-gray-800 font-semibold mb-2">Select Service</label>
+          <div>
+            <label className="font-semibold">Select Service</label>
             <select
               value={service}
-              onChange={(e) => setService(e.target.value)}
-              className="px-5 py-3 border border-gray-300 rounded-xl text-gray-800"
               required
+              onChange={(e) => setService(e.target.value)}
+              className="px-5 py-3 border border-gray-300 rounded-xl w-full"
             >
               <option value="">-- Choose a Service --</option>
               {Object.keys(serviceDurations).map((s) => (
@@ -235,46 +178,55 @@ export default function AppointmentPage() {
           </div>
 
           {/* Date */}
-          <div className="flex flex-col">
-            <label className="text-gray-800 font-semibold mb-2">Select Date</label>
+          <div>
+            <label className="font-semibold">Select Date</label>
             <input
               type="date"
+              required
               value={date}
               onChange={(e) => setDate(e.target.value)}
-              className="px-5 py-3 border border-gray-300 rounded-xl text-gray-800"
-              required
+              className="px-5 py-3 border border-gray-300 rounded-xl w-full"
             />
           </div>
 
-          {/* Time */}
-          <div className="flex flex-col">
-            <label className="text-gray-800 font-semibold mb-2">Select Time</label>
-            <select
-              value={formData.time}
-              onChange={(e) => setFormData({ ...formData, time: e.target.value })}
-              className="px-5 py-3 border border-gray-300 rounded-xl text-gray-800"
-              required
-              disabled={!service || !date || timeSlots.length === 0}
-            >
-              <option value="">-- Choose a Time Slot --</option>
-
-              {timeSlots.map((slot) => (
-                <option
-                  key={slot}
-                  value={slot}
-                  disabled={bookedSlots.includes(slot)}
-                >
-                  {bookedSlots.includes(slot) ? `❌ ${slot} (full)` : slot}
-                </option>
-              ))}
-            </select>
+          {/* Time Slots */}
+          <div>
+            <label className="font-semibold">Time Slots</label>
+            <div className="flex flex-wrap gap-3 mt-2">
+              {timeSlots.length === 0 && (
+                <p className="text-gray-500">Select service & date</p>
+              )}
+              {timeSlots.map((slot) => {
+                const isBooked = bookedSlots.includes(slot);
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    disabled={isBooked}
+                    onClick={() => setFormData({ ...formData, time: slot })}
+                    className={`px-4 py-2 rounded-lg border font-medium ${
+                      isBooked
+                        ? "bg-red-500 text-white cursor-not-allowed"
+                        : formData.time === slot
+                        ? "bg-black text-white border-black"
+                        : "bg-green-500 text-white hover:bg-green-600"
+                    }`}
+                  >
+                    {slot}
+                  </button>
+                );
+              })}
+              {timeSlots.filter(slot => !bookedSlots.includes(slot)).length === 0 && (
+                <p className="text-red-500 mt-2"></p>
+              )}
+            </div>
           </div>
 
           {/* Submit */}
           <button
             type="submit"
-            disabled={loading || fullyBookedDay}
-            className="mt-6 w-full bg-black text-white py-3 rounded-xl font-semibold shadow-lg"
+            disabled={loading || !formData.time}
+            className="w-full bg-black text-white py-3 rounded-xl font-semibold shadow-lg hover:shadow-2xl transition-all mt-4"
           >
             {loading ? "Booking..." : "Book Appointment"}
           </button>
